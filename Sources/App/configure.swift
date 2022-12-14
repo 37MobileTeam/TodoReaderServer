@@ -11,4 +11,7 @@ public func configure(_ app: Application) throws {
     let _ = TodoStore.shared
     // register routes
     try routes(app)
+    
+    // Increases the streaming body collection limit to 500kb
+    app.routes.defaultMaxBodySize = "2mb"
 }

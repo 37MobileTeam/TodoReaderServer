@@ -17,6 +17,7 @@ func routes(_ app: Application) throws {
     }
     
     app.get("todo", "v2", "versions") { req -> EventLoopFuture<[RedCrystalModel]> in
+        
         return req.eventLoop.submit {
             return RedCrystalStore.shared.redCrystalVersions
         }
@@ -32,5 +33,17 @@ func routes(_ app: Application) throws {
         return req.eventLoop.submit {
             return NewsStore.shared.newsesList
         }
+    }
+
+    app.post("gw", "request", "decrypt") { req -> EventLoopFuture<String> in
+        return AIOGatewayController().decrypt(request: req)
+    }
+    
+    app.post("gw", "response", "encrypt") { req -> EventLoopFuture<String> in
+        return AIOGatewayController().encrypt(response: req)
+    }
+    
+    app.post("gw", "response", "decrypt") { req -> EventLoopFuture<String> in
+        return AIOGatewayController().decrypt(response: req)
     }
 }
