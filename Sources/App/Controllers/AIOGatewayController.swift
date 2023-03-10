@@ -13,16 +13,12 @@ struct AIOGatewayController: RouteCollection {
         // 加载配置
         guard let data = try? Data(contentsOf: URL.init(fileURLWithPath: "./Resource/x_secure_key.json")),
               let jsonObject = try? JSONSerialization.jsonObject(with: data),
-              let jsonObject = jsonObject as? [String: Any] else {
+              let jsonArray = jsonObject as? [[String: Any]] else {
             return
         }
-        AIOGateway.updateAppSecrets(jsonObject)
-        guard let data = try? Data(contentsOf: URL.init(fileURLWithPath: "./Resource/x_secure_key_1.json")),
-              let jsonObject1 = try? JSONSerialization.jsonObject(with: data),
-              let jsonObject1 = jsonObject1 as? [String: Any] else {
-            return
+        jsonArray.forEach { jsonObject in
+            AIOGateway.updateAppSecrets(jsonObject)
         }
-        AIOGateway.updateAppSecrets(jsonObject1)
     }
     
     func boot(routes: RoutesBuilder) throws {
