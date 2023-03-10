@@ -1,6 +1,6 @@
 //
 //  AIOGateway.swift
-//  PassionKit
+//  RedCrystal
 //
 //  Created by lory on 2022/10/21.
 //  Copyright © 2022 sqsy. All rights reserved.
@@ -11,25 +11,29 @@ import CommonCrypto
 
 /// All-in-One Gateway 统一网关
 struct AIOGateway {
-    let processID = String( ProcessInfo.processInfo.processIdentifier )
-#if DEBUG
-    var aesSalt = "1234567890123456" // 固定Key(16位)
-#else
-    var aesSalt = "1234567890123456" // TODO: 发版时替换正式的Key
-#endif
-    var request: URLRequest
-    var millisecondTime: String { String( Int(Date().timeIntervalSince1970 * 1000)) }
+    private let processID = String( ProcessInfo.processInfo.processIdentifier )
+    // TODO: (liwei) 待开启正式环境
+//#if DEBUG
+    private(set) var xRequestVersion: String = "" // 1为测试， 其他为正式
+    private(set) var defaultAppSecret = "1234567890123456"
+//#else
+//    private(set) var xRequestVersion: String = "" // 1为测试， 其他为正式
+//    private(set) var defaultAppSecret = "s" + "o" + "C" + "2" + "G" + "A" + "r" + "8" + "j" + "N" + "2" + "f" + "s" + "b" + "r" + "y"
+//#endif
+    private(set) static var appSecrets: [[String: Any]] = []
+    private var request: URLRequest
+    private var millisecondTime: String { String( Int(Date().timeIntervalSince1970 * 1000)) }
     var ramdonString: String { UUID().uuidString.components(separatedBy: "-").dropFirst(3).joined(separator: "") }
-    var xRequestId: String?
-    var xResponseNonceStr: String?
-    var params: [String: Any] = [:]
+    private(set) var xRequestId: String?
+    private var xRequestNonceStrWithResponse: String?
+    private var xResponseNonceStr: String?
+    private var params = [String: Any]()
     
-    let options = CCOptions(kCCOptionPKCS7Padding)
+    private let options = CCOptions(kCCOptionPKCS7Padding)
 
-    var active = false
-    var cryptoType: CryptoType = .plainText
+    private var active = false
+    private var cryptoType: CryptoType = .plainText
     
-    var xRequestNonceStr: String?
     
     private var requestId: String {
         "iOS-\(self.processID)-\(self.millisecondTime)-\(self.ramdonString)".md5()
@@ -38,20 +42,22 @@ struct AIOGateway {
     init(_ type: CryptoType = .encryptAES256CBC,
          request: URLRequest = URLRequest(url: URL(string: "about://blank")!),
          xRequestId: String? = nil,
+         xRequestVersion: String?,
          params: [String: Any] = [:]) {
         self.active = true
         self.cryptoType = type
         self.request = request
         self.xRequestId = xRequestId ?? self.requestId
         self.params = params
+        self.xRequestVersion = xRequestVersion ?? ""
     }
     
     func xRequestNonceStr(_ signStr: String) -> String {
-        signStr.md5()
+        md5(signStr)
     }
     
     func requestAesKey(_ xRequestNonceStr: String) -> String {
-        aesSalt + String(xRequestNonceStr.prefix(16))
+        self.aesSalt() + String(xRequestNonceStr.prefix(16))
     }
     
     func requestIV(_ xRequestNonceStr: String) -> String {
@@ -59,11 +65,35 @@ struct AIOGateway {
     }
     
     func responseAesKey(xRequestNonceStr: String, xResponseNonceStr: String) -> String {
-        aesSalt + String(xRequestNonceStr.prefix(8)) + String(xResponseNonceStr.prefix(8))
+        self.aesSalt() + String(xRequestNonceStr.prefix(8)) + String(xResponseNonceStr.prefix(8))
     }
     
     func responseIV(_ xRequestNonceStr: String) -> String {
         String(xRequestNonceStr.prefix(24).suffix(16))
+    }
+    func aesSalt() -> String {
+        var decodeStr: String?
+        AIOGateway.appSecrets.forEach { appSecret in
+            if let version = appSecret["X-Request-Version"] as? String, self.xRequestVersion == version {
+                let key = appSecret["X-Request-AppKey"] as? String ?? ""
+                let target = appSecret["X-Request-AppSecret"] as? String ?? ""
+                let options = CCOptions(kCCOptionPKCS7Padding)
+                let encryKey = String((key + String(repeating: "0", count: 16)).prefix(16))
+                let iv = encryKey
+                decodeStr = try? AES(keyString: encryKey, options: options).decrypt(target.base64urlToBase64, iv: iv)
+            }
+        }
+        return decodeStr ?? defaultAppSecret // 固定Key(16位)
+    }
+    static func updateAppSecrets(_ newSecret: [String: Any]) {
+        AIOGateway.appSecrets.removeAll { appSecret in
+            if let version = appSecret["X-Request-Version"] as? String, let newVersion = newSecret["X-Request-Version"] as? String,
+               version == newVersion {
+                return true
+            }
+            return false
+        }
+        AIOGateway.appSecrets.append(newSecret)
     }
 }
 
@@ -176,5 +206,84 @@ extension AIOGateway {
             body.append(keyValue)
         }
         return body.joined(separator: separator)
+    }
+}
+extension AIOGateway {
+    private func md5(_ str: String) -> String {
+        let cStr = str.cString(using: String.Encoding.utf8)
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 16)
+        CC_MD5(cStr!, (CC_LONG)(strlen(cStr!)), buffer)
+        let md5String = NSMutableString()
+        for index in 0 ..< 16 {
+            md5String.appendFormat("%02x", buffer[index])
+        }
+        free(buffer)
+        return md5String as String
+    }
+}
+
+extension AIOGateway {
+    init(_ type: CryptoType = .encryptAES256CBC, requestNonceStr: String, responseNonceStr: String, requestVersion: String?) {
+        self.active = true
+        self.cryptoType = type
+        self.xRequestNonceStrWithResponse = requestNonceStr
+        self.xResponseNonceStr = responseNonceStr
+        self.xRequestVersion = requestVersion ?? ""
+        self.params = [:]
+        self.request = URLRequest(url: URL(string: "about://blank")!)
+    }
+    
+    func encrypt(response: String) throws -> String? {
+        if response.isEmpty {
+            return response
+        }
+        guard self.cryptoType == CryptoType.encryptAES256CBC else {
+            return response
+        }
+        guard let xRequestNonceStr = self.xRequestNonceStrWithResponse, let xResponseNonceStr = self.xResponseNonceStr else {
+            return response
+        }
+        let aesKey = self.responseAesKey(xRequestNonceStr: xRequestNonceStr, xResponseNonceStr: xResponseNonceStr)
+        let iv = responseIV(xResponseNonceStr)
+        if let data = try? AES(keyString: aesKey,
+                               options: options).encrypt(response,
+                                                         iv: iv) {
+            return data.base64Url
+        }
+        return nil
+    }
+    
+    func decrypt(response: String) throws -> String {
+        
+        let tool: AIOGateway? = AIOGateway(.encryptAES256CBC,
+                                           xRequestId: xRequestId, xRequestVersion: xRequestVersion)
+        guard let data = response.data(using: .utf8) else {
+            return ""
+        }
+        
+        guard let xRequestNonceStr = self.xRequestNonceStrWithResponse, let xResponseNonceStr = self.xResponseNonceStr else {
+            return response
+        }
+        let aesKey = tool?.responseAesKey(xRequestNonceStr: xRequestNonceStr, xResponseNonceStr: xResponseNonceStr)
+        let iv = tool?.responseIV(xResponseNonceStr)
+        let plainData = try tool?.decrypt(data,
+                                          aesKey: aesKey!,
+                                          iv: iv!,
+                                          cookie: nil,
+                                          authorization: nil)
+        guard let plainData = plainData, let plainText = String(data: plainData,
+                                                                encoding: .utf8) else {
+            return ""
+        }
+            
+        return plainText
+    }
+    
+    func requestDecryptAesKey(_ xRequestNonceStr: String) -> String {
+        self.aesSalt() + String(xRequestNonceStr.prefix(16))
+    }
+    
+    func requestDecryptIV(_ xRequestNonceStr: String) -> String {
+        String(xRequestNonceStr.suffix(16))
     }
 }

@@ -46,4 +46,13 @@ func routes(_ app: Application) throws {
     app.post("gw", "response", "decrypt") { req -> EventLoopFuture<String> in
         return AIOGatewayController().decrypt(response: req)
     }
+    app.post("gw", "v2", "request", "decrypt") { req -> EventLoopFuture<String> in
+        return AIOGatewayController().decrypt(request: req)
+    }
+    app.post("gw", "v2", "response", "encrypt") { req -> EventLoopFuture<String> in
+        return AIOGatewayController().encrypt(response: req)
+    }
+    app.post("gw", "v2", "response", "decrypt") { req -> EventLoopFuture<String> in
+        return AIOGatewayController().decrypt(response: req)
+    }
 }
